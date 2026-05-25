@@ -2,15 +2,19 @@
 
 Predictive modeling of three NFL game outcomes for Weeks 7–11 of the 2025 season, using play-by-play data from the nflfastR database and custom-engineered team performance features.
 
+---
+
 ## Overview
 
-This project includes three separate models to predict:
+This project builds three separate models to predict:
 
 - **Spread** — Home points minus away points (my primary contribution)
 - **Total** — Combined points scored by both teams
 - **Pass** — Combined passing yards for both teams
 
 Each outcome required its own feature engineering approach and model selection process, evaluated using Mean Absolute Error (MAE) via cross-validation. All predictions were generated using only information available before game day to prevent data leakage.
+
+---
 
 ## Data
 
@@ -21,11 +25,14 @@ Each outcome required its own feature engineering approach and model selection p
 ### Custom Engineered Features
 
 | Feature | Description |
+|---|---|
 | **Offensive Score** | Composite z-score index: EPA/play, success rate, completion rate, TDs, yards per rush/play |
 | **Defensive Score** | Composite z-score index (inverted): EPA allowed, yards allowed, sacks |
 | **Passer Rating** | Computed using the official NFL formula from completions, yards, TDs, and interceptions |
 | **Rolling averages** | 3-game lagged and season-to-date averages for points for/against, per team |
 | **Team differentials** | Home minus away for all performance metrics, capturing relative team strength |
+
+---
 
 ## Models
 
@@ -48,24 +55,34 @@ Random Forest regression (via `tidymodels` and `ranger`) using rolling 3-game an
 ### Pass
 Gradient Boosting Machine (GBM) with 5,000 trees, interaction depth of 3, and shrinkage of 0.01. Predictors selected via stepwise regression (`stepAIC`, bidirectional). Optimal tree count determined by 5-fold cross-validation (`gbm.perf`). Final MAE: **18.04**, RMSE: **22.50**.
 
+---
+
 ## Results Summary
 
 | Model | Method | Primary Metric |
+|---|---|---|
 | Spread | Linear regression w/ dampening | MAE (cross-validated on 2024 season) |
 | Total | Random Forest | MAE (3-fold CV) |
 | Pass | Gradient Boosting (GBM) | MAE = 18.04, RMSE = 22.50 |
 
+---
+
 ## Files
 
 | File | Description |
+|---|---|
 | `SpreadRCode.Rmd` | R Markdown source — data cleaning, feature engineering, and spread model |
 | `NFLProject.pdf` | Full written report covering all three models |
+
+---
 
 ## Tools & Libraries
 
 R · nflfastR · nflreadr · tidymodels · ranger · gbm · MASS (stepAIC) · tidyverse · slider
 
+---
+
 ## Authors
 
 Sarah Cao, Nick Copland, Sophia Draghici, Stephen Bridges, Daniel Larson  
-*UNC - STOR 538 — October 2025*
+*STOR 538 — October 2025*
