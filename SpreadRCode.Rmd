@@ -1,0 +1,308 @@
+---
+title: "Playoff Spread Model"
+author: "Daniel Larson"
+date: "2025-10-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r download data}
+library(dplyr)
+library(tidyr)
+library(readr)
+library(stringr)
+library(tidyverse)
+NFLData <- read_csv("small_playoff_dataset.csv")
+
+```
+
+
+
+```{r - score and vegas line}
+game_scores <- NFLData %>%
+  select(game_id, home_team, away_team, home_score, away_score, spread_line) %>%
+  distinct()
+```
+
+```{r - team level data (2rows per game)}
+pbp_filtered <- NFLData %>%
+  filter(!is.na(posteam))    
+
+# ----- aggregate per team per game -----
+team_game_summary <- pbp_filtered %>%
+  group_by(game_id, posteam) %>%
+  summarise(
+    total_yards = sum(yards_gained, na.rm = TRUE),
+    pass_yards = sum(if_else(play_type == "pass", yards_gained, 0), na.rm = TRUE),
+    rush_yards = sum(if_else(play_type == "run", yards_gained, 0), na.rm = TRUE),
+    pass_att = sum(if_else(!is.na(pass_attempt) & pass_attempt == 1, 1, 0), na.rm = TRUE),
+    rush_att = sum(if_else(!is.na(rush_attempt) & rush_attempt == 1, 1, 0), na.rm = TRUE),
+    comp_pass = sum(if_else(!is.na(complete_pass) & complete_pass == 1, 1, 0), na.rm = TRUE),
+    total_plays = n(),
+    .groups = "drop"
+  ) %>%
+  # add simple efficiency metrics per team-game
+  mutate(
+    yards_per_play = if_else(total_plays > 0, total_yards / total_plays, NA_real_),
+    yards_per_pass = if_else(pass_att > 0, pass_yards / pass_att, NA_real_),
+    yards_per_rush = if_else(rush_att > 0, rush_yards / rush_att, NA_real_)
+  )
+```
+
+```{r - join 2 datasets}
+team_game_with_scores <- team_game_summary %>%
+  left_join(game_scores, by = "game_id") %>%
+  # determine home vs away by comparing posteam string to home_team / away_team
+  mutate(
+    home_or_away = case_when(
+      posteam == home_team ~ "home",
+      posteam == away_team ~ "away",
+      TRUE ~ NA_character_
+    )
+  )
+
+```
+
+```{r - one row per game, add actual score}
+game_level <- team_game_with_scores %>%
+  select(
+    game_id, home_team, away_team, spread_line,
+    home_or_away, posteam,
+    total_yards, pass_yards, rush_yards,
+    total_plays, pass_att, rush_att, comp_pass,
+    yards_per_play, yards_per_pass, yards_per_rush,
+    home_score, away_score
+  ) %>%
+  pivot_wider(
+    id_cols = c(game_id, home_team, away_team, spread_line, home_score, away_score),
+    names_from = home_or_away,
+    values_from = c(posteam, total_yards, pass_yards, rush_yards, total_plays, pass_att, rush_att, comp_pass,
+                    yards_per_play, yards_per_pass, yards_per_rush),
+    names_glue = "{.value}_{home_or_away}"
+  ) %>%
+  mutate(
+    actual_spread = home_score - away_score,
+    predicted_spread = NA_real_
+  )
+```
+
+
+```{r - 2025 team level stats}
+game_2025 <- game_level %>%
+  filter(str_starts(as.character(game_id), "2025"))
+
+team_2025 <- game_2025 %>%
+  select(game_id, team = home_team, opponent = away_team,
+         points_for = home_score, points_against = away_score,
+         total_yards = total_yards_home, pass_yards = pass_yards_home,
+         rush_yards = rush_yards_home, total_plays = total_plays_home,
+         yards_per_play = yards_per_play_home) %>%
+  bind_rows(
+    game_2025 %>%
+      select(game_id, team = away_team, opponent = home_team,
+             points_for = away_score, points_against = home_score,
+             total_yards = total_yards_away, pass_yards = pass_yards_away,
+             rush_yards = rush_yards_away, total_plays = total_plays_away,
+             yards_per_play = yards_per_play_away)
+  )
+
+team_2025_summary <- team_2025 %>%
+  group_by(team) %>%
+  summarise(
+    games_played = n(),
+    avg_points_for = mean(points_for, na.rm = TRUE),
+    avg_points_against = mean(points_against, na.rm = TRUE),
+    avg_yard_diff = mean(total_yards - (pass_yards + rush_yards), na.rm = TRUE), 
+    avg_total_yards = mean(total_yards, na.rm = TRUE),
+    avg_pass_yards = mean(pass_yards, na.rm = TRUE),
+    avg_rush_yards = mean(rush_yards, na.rm = TRUE),
+    avg_total_plays = mean(total_plays, na.rm = TRUE),
+    avg_yards_per_play = mean(yards_per_play, na.rm = TRUE),
+    point_diff = mean(points_for - points_against, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+
+```{r - team avg per season}
+
+game_level <- game_level %>%
+  mutate(season = str_sub(as.character(game_id), 1, 4))
+
+# Stack home and away into team-level format
+team_games <- game_level %>%
+  select(game_id, season,
+         team = home_team, opponent = away_team,
+         points_for = home_score, points_against = away_score,
+         total_yards = total_yards_home, pass_yards = pass_yards_home,
+         rush_yards = rush_yards_home, total_plays = total_plays_home,
+         yards_per_play = yards_per_play_home) %>%
+  bind_rows(
+    game_level %>%
+      select(game_id, season,
+             team = away_team, opponent = home_team,
+             points_for = away_score, points_against = home_score,
+             total_yards = total_yards_away, pass_yards = pass_yards_away,
+             rush_yards = rush_yards_away, total_plays = total_plays_away,
+             yards_per_play = yards_per_play_away)
+  )
+
+# Compute season-to-date averages per team
+team_avgs <- team_games %>%
+  group_by(season, team) %>%
+  summarise(
+    games_played = n(),
+    avg_points_for = mean(points_for, na.rm = TRUE),
+    avg_points_against = mean(points_against, na.rm = TRUE),
+    avg_total_yards = mean(total_yards, na.rm = TRUE),
+    avg_pass_yards = mean(pass_yards, na.rm = TRUE),
+    avg_rush_yards = mean(rush_yards, na.rm = TRUE),
+    avg_total_plays = mean(total_plays, na.rm = TRUE),
+    avg_yards_per_play = mean(yards_per_play, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+
+```{r - team avg home and away}
+# create home/away versions of team_avgs
+home_avgs <- team_avgs %>%
+  rename(home_team = team) %>%
+  rename_with(~ paste0(.x, "_home"), -c(season, home_team))
+
+away_avgs <- team_avgs %>%
+  rename(away_team = team) %>%
+  rename_with(~ paste0(.x, "_away"), -c(season, away_team))
+
+# join both onto the game_level data
+model_data <- game_level %>%
+  left_join(home_avgs, by = c("season", "home_team")) %>%
+  left_join(away_avgs, by = c("season", "away_team"))
+```
+
+
+```{r - diff real vs avg, points and yards}
+model_data <- model_data %>%
+  mutate(
+    points_for_diff = avg_points_for_home - avg_points_for_away,
+    points_against_diff = avg_points_against_home - avg_points_against_away,
+    total_yards_diff = avg_total_yards_home - avg_total_yards_away,
+    pass_yards_diff = avg_pass_yards_home - avg_pass_yards_away,
+    rush_yards_diff = avg_rush_yards_home - avg_rush_yards_away,
+    plays_diff = avg_total_plays_home - avg_total_plays_away,
+    yards_per_play_diff = avg_yards_per_play_home - avg_yards_per_play_away
+  )
+
+```
+
+
+```{r - train and test}
+set.seed(704)
+train_index <- sample(seq_len(nrow(model_ready)), size = 0.8 * nrow(model_ready))
+train <- model_ready[train_index, ]
+test  <- model_ready[-train_index, ]
+```
+
+
+```{r - linear regression model}
+spread_model1 <- lm(
+  actual_spread ~ spread_line + points_for_diff + points_against_diff +
+    total_yards_diff + pass_yards_diff + rush_yards_diff + plays_diff + yards_per_play_diff,
+  data = train
+)
+summary(spread_model1)
+test$predicted_spread <- predict(spread_model1, newdata = test)
+
+mae1 <- mean(abs(test$predicted_spread - test$actual_spread), na.rm = TRUE)
+correlation1 <- cor(test$predicted_spread, test$actual_spread, use = "complete.obs")
+
+cat("Mean Absolute Error:", round(mae1, 2), "\n")
+cat("Correlation with actual spread:", round(correlation1, 3), "\n")
+
+```
+```{r}
+library(dplyr)
+
+# Stack home and away to team-level long format
+team_games_long <- game_level %>%
+  select(game_id, season,
+         team = home_team, opponent = away_team,
+         points_for = home_score, points_against = away_score) %>%
+  bind_rows(
+    game_level %>%
+      select(game_id, season,
+             team = away_team, opponent = home_team,
+             points_for = away_score, points_against = home_score)
+  ) %>%
+  arrange(season, team, game_id) %>%
+  group_by(season, team) %>%
+  mutate(
+    recent_form = zoo::rollapply(points_for - points_against, width = 3, FUN = mean, align = "right", fill = NA, na.rm = TRUE)
+  ) %>%
+  ungroup()
+```
+
+```{r}
+home_recent <- team_games_long %>%
+  select(game_id, team, recent_form) %>%
+  rename(home_team = team, recent_form_home = recent_form)
+
+away_recent <- team_games_long %>%
+  select(game_id, team, recent_form) %>%
+  rename(away_team = team, recent_form_away = recent_form)
+
+model_data_recent <- model_data %>%
+  left_join(home_recent, by = c("game_id", "home_team")) %>%
+  left_join(away_recent, by = c("game_id", "away_team")) %>%
+  mutate(recent_form_diff = recent_form_home - recent_form_away)
+
+```
+
+```{r}
+spread_model_recent <- lm(
+  actual_spread ~ spread_line + points_for_diff + points_against_diff +
+    total_yards_diff + pass_yards_diff + rush_yards_diff +
+    points_for_diff:points_against_diff +
+    yards_per_play_diff,
+  data = model_data_recent
+)
+test$predicted_recent <- predict(spread_model_recent, newdata = test)
+mae_recent <- mean(abs(test$predicted_recent - test$actual_spread))
+
+cat("MAE Recent Form Model:", round(mae_recent, 2), "\n")
+
+```
+
+```{r - predict NYJ vs Panthers}
+NYJ <- team_2025_summary %>% filter(team == "NYJ")
+CAR <- team_2025_summary %>% filter(team == "CAR")
+
+NYJ_CAR_Wk7 <- tibble(
+  spread_line = -1.5,  
+  points_for_diff = NYJ$avg_points_for - CAR$avg_points_for,
+  points_against_diff = NYJ$avg_points_against - CAR$avg_points_against,
+  total_yards_diff = NYJ$avg_total_yards - CAR$avg_total_yards,
+  pass_yards_diff = NYJ$avg_pass_yards - CAR$avg_pass_yards,
+  rush_yards_diff = NYJ$avg_rush_yards - CAR$avg_rush_yards,
+  plays_diff = NYJ$avg_total_plays - CAR$avg_total_plays,
+  yards_per_play_diff = NYJ$avg_yards_per_play - CAR$avg_yards_per_play
+)
+
+predicted_spread <- predict(spread_model1, newdata = NYJ_CAR_Wk7)
+predicted_spread
+
+
+```
+
+
+
+
